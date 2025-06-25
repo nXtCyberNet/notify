@@ -6,7 +6,8 @@ from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, messaging
 import time
-# Add Prometheus client import
+import os
+# Remove dotenv import
 from prometheus_client import Counter, Histogram, Gauge, start_http_server
 
 # Initialize Prometheus metrics
@@ -26,38 +27,31 @@ DB_QUERY_TIME = Histogram('notification_db_query_seconds',
 KAFKA_CONSUMER_LAG = Gauge('notification_kafka_consumer_lag',
                          'Kafka consumer lag in messages')
 
-# Load credentials from JSON file
-def load_credentials():
-    with open('credentials.json', 'r') as f:
-        return json.load(f)
-
-# Get credentials
-creds = load_credentials()
-
 # Initialize Firebase Admin SDK
-firebase_creds = credentials.Certificate(creds.get("firebase", {}).get("service_account_path", "credentials.json"))
+# Get path from environment variable
+firebase_service_account_path = os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH")
+firebase_creds = credentials.Certificate(firebase_service_account_path)
 firebase_admin.initialize_app(firebase_creds)
 
-# Database configuration
-DB_CONFIG = creds.get("database", {
-    "dbname": "postgres",
-    "user": "postgres",
-    "password": "root",
-    "host": "34.131.223.3",
-    "port": 5432
-})
+# Database configuration from environment variables
+PG_HOST = os.environ.get("PG_HOST")
+PG_DB = os.environ.get("PG_DB")
+PG_USER = os.environ.get("PG_USER")
+PG_PASSWORD = os.environ.get("PG_PASSWORD")
+PG_PORT = int(os.environ.get("PG_PORT", "5432"))
 
-PG_HOST = DB_CONFIG["host"]
-PG_DB = DB_CONFIG["dbname"]
-PG_USER = DB_CONFIG["user"]
-PG_PASSWORD = DB_CONFIG["password"]
+# Kafka configuration from environment variables
+KAFKA_CONFIG = {
+    'bootstrap.servers': os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+    'group.id': os.environ.get("KAFKA_GROUP_ID", "mygroup"),
+    'auto.offset.reset': os.environ.get("KAFKA_AUTO_OFFSET_RESET", "earliest"),
+}
 
-# Kafka configuration
-KAFKA_CONFIG = creds.get("kafka", {
-    'bootstrap.servers': 'localhost:9092',
-    'group.id': 'mygroup',
-    'auto.offset.reset': 'earliest',
-})
+# Kafka topic from environment variable
+NOTIFICATION_TOPIC = os.environ.get("KAFKA_NOTIFICATION_TOPIC", "notification-topic")
+
+# Prometheus port from environment variable
+PROMETHEUS_PORT = int(os.environ.get("PROMETHEUS_PORT", "8123"))
 
 async def pg_con(): 
     try:
@@ -65,7 +59,8 @@ async def pg_con():
             host=PG_HOST,
             database=PG_DB,
             user=PG_USER,
-            password=PG_PASSWORD
+            password=PG_PASSWORD,
+            port=PG_PORT
         )
     except Exception as e:
         DB_ERRORS.inc()
@@ -110,7 +105,7 @@ async def push(fcm_token, title, message):
 async def kafka_consumer():
     conn = await pg_con()
     consumer = Consumer(KAFKA_CONFIG)
-    consumer.subscribe(["notification-topic"])
+    consumer.subscribe([NOTIFICATION_TOPIC])
     loop = asyncio.get_running_loop()
 
     try:
@@ -152,9 +147,9 @@ async def kafka_consumer():
 
 # Entry point
 async def main():
-    # Start Prometheus HTTP server on port 8000
-    start_http_server(8000)
-    print("📊 Prometheus metrics available at http://localhost:8000")
+    # Start Prometheus HTTP server
+    start_http_server(PROMETHEUS_PORT)
+    print(f"📊 Prometheus metrics available at http://localhost:{PROMETHEUS_PORT}")
     await kafka_consumer()
 
 if __name__ == '__main__':
